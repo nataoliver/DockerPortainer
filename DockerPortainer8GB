@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Atualiza o apt-cache
+apt-get update
+apt-get install -y sudo curl git wget dialog apt-transport-https ca-certificates gnupg2 curl software-properties-common htop
+
+# Configura um SWAP de 8GB
+fallocate -l 8G /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
+swapon /swapfile
+
+# Instala as dependências para o Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Cria as networks
+docker network create -d bridge mysql
+docker network create -d bridge public
+
+# Gera arquivo de configuração do nginx
+{ echo 'server_tokens off;'; echo 'client_max_body_size 256m;'; } > /root/my_proxy.conf
+
+# Instala o Nginx Reverse Proxy
+docker run --detach \
+    --restart always \
+    --name nginx-proxy \
+    --network=public \
+    --publish 80:80 \
+    --publish 443:443 \
+    --volume nginx_certs:/etc/nginx/certs \
+    --volume nginx_vhost:/etc/nginx/vhost.d \
+    --volume nginx_usr:/usr/share/nginx/html \
+    --volume /var/run/docker.sock:/tmp/docker.sock:ro \
+    --volume /root/my_proxy.conf:/etc/nginx/conf.d/my_proxy.conf:ro \
+    jwilder/nginx-proxy
+
+# Instala o Let's Encrypt
+docker run --detach \
+    --name letsencrypt \
+    --restart always \
+    --network=public \
+    --volumes-from nginx-proxy \
+    --volume /var/run/docker.sock:/var/run/docker.sock:ro \
+    jrcs/letsencrypt-nginx-proxy-companion
+
+# Instala o Portainer
+docker pull portainer/portainer
+docker volume create portainer_data
+docker run -d --name portainer --restart always -p 9000:9000 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer:latest
